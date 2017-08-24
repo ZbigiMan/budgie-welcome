@@ -44,8 +44,8 @@ import locale
 import gettext
 import getpass
 
-from gi.repository import WebKit2, Gtk, Gio, Gdk
-from threading import Thread
+from gi.repository import WebKit2, Gtk, Gio, Gdk, GLib
+#from threading import Thread
 from queue import Queue, Empty
 from notify2 import Notification, init as NotifyInit
 
@@ -144,8 +144,8 @@ class AppView(WebKit2.WebView):
             if systemstate.arch == 'i386':
                 app.update_page('.64bitonly', 'hide')
 
-            thread = Thread(target = self.check_animation_status)
-            thread.start()
+            #thread = Thread(target = self.check_animation_status)
+            #thread.start()
         ### Index Page ###
         if current_page == 'index':
             if systemstate.autostart:
@@ -244,8 +244,9 @@ class AppView(WebKit2.WebView):
                     self.run_javascript("sortList()")
             # Checking on cache will take sometime. So run it on a
             # separate thread.
-            thread = Thread(target=checkInstallationStatus)
-            thread.start()
+            #thread = Thread(target=checkInstallationStatus)
+            #thread.start()
+            checkInstallationStatus()
 
         self.run_javascript("$('span[name=\"distro-name\"]').html('{}')".format(systemstate.distroname))
 
@@ -397,7 +398,8 @@ class AppView(WebKit2.WebView):
 
                 self._push_config()
 
-            Thread(target = panelOperation).start()
+            #Thread(target = panelOperation).start()
+            panelOperation()
 
         elif uri == 'software-center':
             try:
@@ -520,7 +522,7 @@ class AppView(WebKit2.WebView):
 
                 self._push_config()
 
-            Thread(target = applyStyle).start()
+            applyStyle()
 
         elif uri == 'close':
             app.close()
@@ -682,16 +684,17 @@ class PopupMessage(object):
         app.update_page('#popup-message-container', 'append','<div class="text-md-right">' + buttons + '</div>')
         app.update_page('#popup-message-window', 'fadeIn')
 
-class PackageManager(Thread):
+class PackageManager(object):
 
     def __init__(self, queue):
-        Thread.__init__(self)
+        #Thread.__init__(self)
 
         # Don't create cache object each time instead use global cache
         self.cache = cache
         self.queue = queue
         self.running = True
         self.active = None
+        self._processrunning = False
 
     def __isPackageInstalled(self, package):
         try:
@@ -741,58 +744,80 @@ class PackageManager(Thread):
         return installed
 
     def run(self):
-        while self.running:
-            try:
-                entry = self.queue.get(timeout = 1)
-            except Empty:
-                continue
+        #while self.running:
+        if not self.running:
+            return False
+            
+        if self._processrunning:
+            return True
 
-            self.active = entry
-            filename = entry.filename
-            code = entry.code
+        try:
+            entry = self.queue.get(timeout = 1)
+        except Empty:
+            #continue
+            return True
 
-            action = "INSTALL" if entry.task == PMEntry.INSTALL else "REMOVE"
+        self.active = entry
+        filename = entry.filename
+        code = entry.code
 
-            # Steam requires GNOME Software and there is problem in running
-            # GNOME Software in privileged mode.
-            global start_location
-            if code == 'steam':
-                p = subprocess.Popen([app._data_path + 'scripts/steam'])
-            else:
-                p = subprocess.Popen(['pkexec',
-                    start_location + 'budgie-welcome-privileged-actions',
-                    action, filename, code, app.json_path])
-            retval = p.wait()
+        action = "INSTALL" if entry.task == PMEntry.INSTALL else "REMOVE"
 
-            post_install = pdata.getPostInstall(filename, code)
+        # Steam requires GNOME Software and there is problem in running
+        # GNOME Software in privileged mode.
+        global start_location
+        if code == 'steam':
+            self._p = subprocess.Popen([app._data_path + 'scripts/steam'])
+        else:
+            self._p = subprocess.Popen(['pkexec',
+                start_location + 'budgie-welcome-privileged-actions',
+                action, filename, code, app.json_path])
+                
+        self._processrunning = True
+        
+        GLib.timeout_add_seconds(5, self._checkrunning, filename, code, entry)
+        
+        return True
+        
+    def _checkrunning(self, filename, code, entry):
+        retval = self._p.poll()
 
-            if retval == 0 and post_install :
-                app.webkit._do_command("script?" + post_install)
+        if retval is None:
+            return True
 
-            if entry.task == PMEntry.INSTALL:
-                app.update_page('#' + code + '-install', 'removeClass', 'disabled')
-            else:
-                app.update_page('#' + code + '-remove', 'removeClass', 'disabled')
+        post_install = pdata.getPostInstall(filename, code)
 
-            app.update_page('#' + code + '-status', 'fadeOut')
+        if retval == 0 and post_install :
+            app.webkit._do_command("script?" + post_install)
 
-            systemstate.removeIntermediateActions(filename, entry.actions)
+        if entry.task == PMEntry.INSTALL:
+            app.update_page('#' + code + '-install', 'removeClass', 'disabled')
+        else:
+            app.update_page('#' + code + '-remove', 'removeClass', 'disabled')
 
+        app.update_page('#' + code + '-status', 'fadeOut')
 
-            action = "removal" if entry.task == PMEntry.REMOVE else "installation"
-
-            if retval == 0:
-                Notifier(Notifier.INFO, "Completed " + action + " of " + entry.code).show()
-            else:
-                Notifier(Notifier.ERROR, "Failed " + action + " of " + entry.code).show()
-
-            self.reload_cache()
-
-            self.active = None
-            app.webkit._push_config()
+        systemstate.removeIntermediateActions(filename, entry.actions)
 
 
-            self.queue.task_done()
+        action = "removal" if entry.task == PMEntry.REMOVE else "installation"
+
+        if retval == 0:
+            Notifier(Notifier.INFO, "Completed " + action + " of " + entry.code).show()
+        else:
+            Notifier(Notifier.ERROR, "Failed " + action + " of " + entry.code).show()
+
+        self.reload_cache()
+
+        self.active = None
+        app.webkit._push_config()
+
+        self.queue.task_done()
+        
+        self._processrunning = False
+        
+        return False
+
 
     def reload_cache(self):
         dbg.stdout('Apt', 'Reloading cache...', 0, 3)
@@ -972,9 +997,12 @@ class SystemState(object):
             self.boot_mode = 'BIOS'
 
         # Multithread to prevent holding up program execution.
-        Thread(target=self.check_internet_connection).start()
-        Thread(target=self.detect_graphics).start()
-        Thread(target=self.find_app_version).start()
+        #Thread(target=self.check_internet_connection).start()
+        self.check_internet_connection()
+        #Thread(target=self.detect_graphics).start()
+        self.detect_graphics()
+        #Thread(target=self.find_app_version).start()
+        self.find_app_version()
         # uncomment this when developing the connection speed capability
         #Thread(target=self.detect_connection_speed).start()
 
@@ -1476,6 +1504,7 @@ class WelcomeApp(object):
 
     def run(self):
         signal.signal(signal.SIGINT, signal.SIG_DFL)
+        GLib.timeout_add_seconds(5, pm.run)
         Gtk.main()
 
     def _load_css(self):
@@ -1517,7 +1546,7 @@ class WelcomeApp(object):
             return
 
         pm_queue.join()
-        pm.join()
+        #pm.join()
 
         Gtk.main_quit(p1, p2)
 
@@ -1828,7 +1857,6 @@ if __name__ == "__main__":
     cache = apt.Cache()
     pm_queue = Queue()
     pm = PackageManager(pm_queue)
-    pm.start()
     # Init notification
     try:
         NotifyInit("budgie-welcome")
