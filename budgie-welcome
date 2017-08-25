@@ -1530,8 +1530,6 @@ class WelcomeApp(object):
 
     def close(self, p1 = None, p2 = None):
 
-        pm.running = False
-        print("Close requested")
         # Reduce race condition as much as possible
         temp = pm.active
         if temp:
@@ -1542,10 +1540,10 @@ class WelcomeApp(object):
             popup.showMessage()
 
             # pm.clearQueue()
-
-            return
+            return True
 
         pm_queue.join()
+        pm.running = False
         #pm.join()
 
         Gtk.main_quit(p1, p2)
@@ -1561,7 +1559,6 @@ class WelcomeApp(object):
             self.webkit.run_javascript('$("' + element + '").' + function + '()')
 
     def run_javascript(self, script):
-        print("Running script", script)
         self.webkit.run_javascript(script)
 
     def _check_first_run(self):
