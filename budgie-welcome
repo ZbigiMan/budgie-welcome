@@ -671,7 +671,6 @@ class PackageManager(Thread):
                 # repo split by the / character to get an array
                 # first element is the ppa organisation and second
                 # is the ppa name
-                print (repos)
                 ppa = repos[systemstate.codename][0][4:].split('/')
 
                 filename = ppa[0] + "-ubuntu-" + ppa[1] + "-" + \
@@ -1348,7 +1347,6 @@ class WelcomeApp(object):
     def close(self, p1 = None, p2 = None):
 
         pm.running = False
-        print("Close requested")
         # Reduce race condition as much as possible
         temp = pm.active
         if temp:
