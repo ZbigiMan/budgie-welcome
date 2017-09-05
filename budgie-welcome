@@ -41,7 +41,7 @@ import json
 import time
 import shutil
 
-from gi.repository import WebKit2, Gtk, Gio
+from gi.repository import WebKit2, Gtk, Gio, GLib
 from threading import Thread
 from queue import Queue, Empty
 from notify2 import Notification, init as NotifyInit
@@ -108,16 +108,16 @@ class AppView(WebKit2.WebView):
 
 
         if systemstate.is_online:
-            self.run_javascript("$('.offline').hide()")
+            app.run_javascript("$('.offline').hide()")
         else:
-            self.run_javascript("$('.offline').show()")
+            app.run_javascript("$('.offline').show()")
 
 
         ### Getting Started Page ###
         if current_page == 'gettingstarted':
             # Display information tailored to graphics vendor (Getting Started / Drivers)
-            self.run_javascript('var graphicsVendor = "' + systemstate.graphics_vendor + '";')
-            self.run_javascript('var graphicsGrep = "' + systemstate.graphics_grep + '";')
+            app.run_javascript('var graphicsVendor = "' + systemstate.graphics_vendor + '";')
+            app.run_javascript('var graphicsGrep = "' + systemstate.graphics_grep + '";')
             app.update_page('#boot-mode', 'html', systemstate.boot_mode)
             graphics_vendor = systemstate.graphics_vendor
 
@@ -144,7 +144,7 @@ class AppView(WebKit2.WebView):
             else:
                 app.update_page('#autostart', 'html', '&#xE836;')
 
-            self.run_javascript('$("#wordmark").attr("src","img/welcome/' + systemstate.distro_wordmark + '");')
+            app.run_javascript('$("#wordmark").attr("src","img/welcome/' + systemstate.distro_wordmark + '");')
 
         elif current_page == 'default':
             panel_backup = localdir + '/panel-backup.conf'
@@ -180,13 +180,13 @@ class AppView(WebKit2.WebView):
                         app.update_page('#' + code + '-install', 'show')
                 # Sort recommendations after checking installation status
                 if current_page == 'recommendations':
-                    self.run_javascript("sortList()")
+                    app.run_javascript("sortList()")
             # Checking on cache will take sometime. So run it on a
             # separate thread.
             thread = Thread(target = checkInstallationStatus)
             thread.start()
 
-        self.run_javascript("$('span[name=\"distro-name\"]').html('{}')".format(systemstate.distroname))
+        app.run_javascript("$('span[name=\"distro-name\"]').html('{}')".format(systemstate.distroname))
 
         # Apply intermediate actions, if any are present
         if current_page in systemstate.intermediate_actions:
@@ -671,6 +671,7 @@ class PackageManager(Thread):
                 # repo split by the / character to get an array
                 # first element is the ppa organisation and second
                 # is the ppa name
+                print (repos)
                 ppa = repos[systemstate.codename][0][4:].split('/')
 
                 filename = ppa[0] + "-ubuntu-" + ppa[1] + "-" + \
@@ -778,15 +779,20 @@ class Notifier(object):
     def __init__(self, type, message):
 
         if type == self.INFO:
-            icon = "dialog-information"
+            self._icon = "dialog-information"
         elif type == self.ERROR:
-            icon = "dialog-error"
+            self._icon = "dialog-error"
 
-        self.notification = Notification("Welcome App", message, icon)
+        #self.notification = Notification("Welcome App", message, icon)
+        self._message = message
 
     def show(self):
         try:
-            self.notification.show()
+            #self.notification.show()
+            msg = 'notify-send --app-name="budgie-welcome" --icon="' + \
+                      self._icon + '" "Budgie Welcome" "' + \
+                      self._message + '"'
+            os.system(msg)
         except:
             # Some error in showing notification
             dbg.stdout('Notification', 'Failed to show notification', 0, 0)
@@ -1252,7 +1258,7 @@ class SystemState(object):
         app.update_page('#specs-tabs', 'fadeIn', 'fast')
         app.update_page('#specs-basic', 'fadeIn', 'medium')
         app.update_page('#specs-busy-basic', 'fadeOut', 'fast')
-        webkit.run_javascript('setCursorNormal()')
+        app.run_javascript('setCursorNormal()')
 
     def find_app_version(self):
         versions = find_app_version(cache)
@@ -1354,7 +1360,7 @@ class WelcomeApp(object):
 
             # pm.clearQueue()
 
-            return
+            return True
 
         pm_queue.join()
         pm.join()
@@ -1365,15 +1371,25 @@ class WelcomeApp(object):
         """ Runs a JavaScript jQuery function on the page,
             ensuring correctly parsed quotes. """
         if parm1 and parm2:
-            self.webkit.run_javascript('$("' + element + '").' + function + "('" + parm1.replace("'", '\\\'') + "', '" + parm2.replace("'", '\\\'') + "')")
+            self.run_javascript('$("' + element + '").' + function + "('" + parm1.replace("'", '\\\'') + "', '" + parm2.replace("'", '\\\'') + "')")
         if parm1:
-            self.webkit.run_javascript('$("' + element + '").' + function + "('" + parm1.replace("'", '\\\'') + "')")
+            self.run_javascript('$("' + element + '").' + function + "('" + parm1.replace("'", '\\\'') + "')")
         else:
-            self.webkit.run_javascript('$("' + element + '").' + function + '()')
+            self.run_javascript('$("' + element + '").' + function + '()')
 
     def run_javascript(self, script):
-        print("Running script", script)
+        """
+        Runs a JavaScript function on the page, regardless of which thread is is called from
+        GTK+ operations must be performed on the same thread to prevent crashes.
+        """
+        GLib.idle_add(self._run_javascript, script)
+
+    def _run_javascript(self, script):
+        """
+        Runs a JavaScript script on the page when invoked from run_javascript()
+        """
         self.webkit.run_javascript(script)
+        return GLib.SOURCE_REMOVE
 
     def _check_first_run(self):
         file = os.path.join(localdir, 'firstrun')
